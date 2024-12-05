@@ -11,18 +11,64 @@ var path = require('path');
 var winston = require('winston');
 var Rotate = require('winston-logrotate').Rotate;
 
-/**
- * Define the Base object (constructor).
- */
-var Logger = function Logger(logs) {
+function useModeConsoleJson(loggerInstance, logs, levels) {
   "use strict";
 
-  var levels = winston.config.syslog.levels;
-  levels['socket'] = 8;
-  winston.setLevels(levels);
+  // Levels that should be printed to standard error.
+  var stdErrLevels = [
+    'error'
+  ];
+
+  // The most of the instances only differ on log-level.
+  var generateConsoleLoggerFor = function (level) {
+    return new (winston.Logger)({
+      levels: levels,
+      transports: [
+        new (winston.transports.Console)({
+          level: level,
+          stderrLevels: stdErrLevels,
+          debugStdout: false,
+          colorize: false,
+          showLevel: true,
+          json: true,
+          timestamp: true,
+          stringify: function (obj) {
+            return JSON.stringify(obj);
+          }
+        })
+      ],
+      exitOnError: false
+    });
+  };
+
+  loggerInstance.infoLog = generateConsoleLoggerFor('info');
+  loggerInstance.debugLog = generateConsoleLoggerFor('debugger');
+  loggerInstance.errorLog = generateConsoleLoggerFor('error');
+  loggerInstance.socketLog = generateConsoleLoggerFor('socket');
+  loggerInstance.excepLog = new (winston.Logger)({
+    levels: levels,
+    transports: [
+      new (winston.transports.Console)({
+        handleExceptions: true,
+        humanReadableUnhandledException: true,
+        colorize: false,
+        showLevel: true,
+        json: true,
+        timestamp: true,
+        stringify: function (obj) {
+          return JSON.stringify(obj);
+        }
+      })
+    ],
+    exitOnError: true
+  });
+}
+
+function useModeFile(loggerInstance, logs, levels) {
+  "use strict";
 
   if (logs.hasOwnProperty('info')) {
-    this.infoLog = new (winston.Logger)({
+    loggerInstance.infoLog = new (winston.Logger)({
       levels: levels,
       transports: [
         new Rotate({
@@ -41,7 +87,7 @@ var Logger = function Logger(logs) {
   }
 
   if (logs.hasOwnProperty('debug')) {
-    this.debugLog = new (winston.Logger)({
+    loggerInstance.debugLog = new (winston.Logger)({
       levels: levels,
       transports: [
         new Rotate({
@@ -60,7 +106,7 @@ var Logger = function Logger(logs) {
   }
 
   if (logs.hasOwnProperty('error')) {
-    this.errorLog = new (winston.Logger)({
+    loggerInstance.errorLog = new (winston.Logger)({
       levels: levels,
       transports: [
         new Rotate({
@@ -79,7 +125,7 @@ var Logger = function Logger(logs) {
   }
 
   if (logs.hasOwnProperty('socket')) {
-    this.socketLog = new (winston.Logger)({
+    loggerInstance.socketLog = new (winston.Logger)({
       levels: levels,
       transports: [
         new Rotate({
@@ -98,7 +144,7 @@ var Logger = function Logger(logs) {
   }
 
   if (logs.hasOwnProperty('exception')) {
-    this.excepLog = new (winston.Logger)({
+    loggerInstance.excepLog = new (winston.Logger)({
       levels: levels,
       transports: [
         new Rotate({
@@ -119,6 +165,27 @@ var Logger = function Logger(logs) {
       ],
       exitOnError: true
     });
+  }
+}
+
+/**
+ * Define the Base object (constructor).
+ */
+var Logger = function Logger(logs) {
+  "use strict";
+
+  var levels = winston.config.syslog.levels;
+  levels['socket'] = 8;
+  winston.setLevels(levels);
+
+  // Determine which mode we are in, default to file.
+  this.mode = logs.hasOwnProperty('mode') ? logs.mode : 'file';
+  if (this.mode === 'file') {
+    useModeFile(this, logs, levels);
+  } else if (this.mode === 'console-json') {
+    useModeConsoleJson(this, logs, levels);
+  } else {
+    throw new Error('Unknown logger mode ' + this.mode);
   }
 };
 
@@ -169,13 +236,22 @@ Logger.prototype.debug = function debug(message) {
  *
  * @param message
  *   The message to send to the logger.
+ *
+ * @param data
+ *   Data-object associated with the log-statement.
  */
 Logger.prototype.socket = function socket(message, data) {
   "use strict";
 
   if (this.socketLog !== undefined) {
     if (data !== undefined) {
-      this.socketLog.log('socket', message + ' <-:-> ', JSON.stringify(data));
+      // If we're in console-json mode the logge will handle the serialization
+      // of the data on its own.
+      if (this.mode === 'console-json') {
+        this.socketLog.log('socket', {'message': message, 'data': data});
+      } else {
+        this.socketLog.log('socket', message + ' <-:-> ', JSON.stringify(data));
+      }
     }
     else {
       this.socketLog.log('socket', message);
